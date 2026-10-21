@@ -242,6 +242,15 @@ const handlers = {
     const dataUrl = await chrome.tabs.captureVisibleTab(sender.tab.windowId, { format: 'png' });
     return { dataUrl };
   },
+  // Gravação: id do stream da própria aba; o content faz getUserMedia(tab) e grava o aparelho.
+  async 'phonesim:record-stream-id'(_msg, tabId) {
+    const streamId = await new Promise((resolve, reject) => {
+      chrome.tabCapture.getMediaStreamId({ targetTabId: tabId, consumerTabId: tabId }, (id) =>
+        chrome.runtime.lastError ? reject(new Error(chrome.runtime.lastError.message)) : resolve(id),
+      );
+    });
+    return { streamId };
+  },
   async 'phonesim:exit'(_msg, tabId) {
     await stopSim(tabId);
     return { ok: true };

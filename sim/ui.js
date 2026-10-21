@@ -71,6 +71,7 @@
     zoom: 'fit',
     syncScroll: true,
     keyboard: true,
+    recordAudio: true,
     frameUrl: location.href,
   };
   Object.assign(state, await send({ type: 'phonesim:get-state' }));
@@ -148,6 +149,7 @@
       <h3>Opções</h3>
       <label class="ps-check"><input type="checkbox" class="ps-sync"><span>Sincronizar interações<small>Rolagem, cliques e digitação</small></span></label>
       <label class="ps-check"><input type="checkbox" class="ps-keyboard-toggle"><span>Teclado virtual<small>Aparece ao tocar num campo</small></span></label>
+      <label class="ps-check"><input type="checkbox" class="ps-rec-audio"><span>Gravar com áudio<small>Captura o som da aba no vídeo</small></span></label>
     </div>
 
     <div class="ps-toast" role="status" aria-live="polite"></div>`;
@@ -166,10 +168,12 @@
   const urlInput = $('.ps-url');
   const syncInput = $('.ps-sync');
   const keyboardToggle = $('.ps-keyboard-toggle');
+  const recAudioInput = $('.ps-rec-audio');
   const devicesList = $('.ps-devices-list');
 
   syncInput.checked = state.syncScroll;
   keyboardToggle.checked = state.keyboard;
+  recAudioInput.checked = state.recordAudio;
   urlInput.value = state.frameUrl;
 
   // estado do teclado virtual desta tela
@@ -724,6 +728,124 @@
     window.removeEventListener('keydown', ed.onKey, true);
   }
 
+  // ---------- gravação de tela (tabCapture + MediaRecorder), como na extensão ----------
+  // Grava o vídeo da aba recortado no aparelho + áudio da aba, com a máscara do aparelho
+  // (cantos/ilha) aplicada por destination-in com a device.png.
+  let rec = null;
+
+  const tabStream = (streamId, withAudio) => {
+    const src = { mandatory: { chromeMediaSource: 'tab', chromeMediaSourceId: streamId } };
+    return navigator.mediaDevices.getUserMedia({ audio: withAudio ? src : false, video: src });
+  };
+
+  async function toggleRecord(btn) {
+    if (rec) return stopRecord();
+    try {
+      const { streamId } = await send({ type: 'phonesim:record-stream-id' });
+      // respeita a opção "Gravar com áudio"; se o navegador recusar o áudio, grava só vídeo
+      let stream;
+      try { stream = await tabStream(streamId, state.recordAudio); }
+      catch { stream = await tabStream(streamId, false); }
+
+      const video = document.createElement('video');
+      video.srcObject = stream;
+      video.muted = true;
+      await video.play();
+
+      // o áudio capturado para de tocar na aba; devolve aos alto-falantes
+      let audioCtx = null;
+      if (stream.getAudioTracks().length) {
+        audioCtx = new AudioContext();
+        audioCtx.createMediaStreamSource(stream).connect(audioCtx.destination);
+        audioCtx.resume?.().catch(() => {});
+      }
+
+      // máscara do aparelho (cantos + ilha/notch), girada em paisagem como na tela
+      const geo = geometry();
+      const mask = await loadImage(assetUrl(`assets/devices/${deviceOf().id}/device.png`));
+
+      // recorta a caixa do aparelho na resolução do vídeo da aba.
+      // Escala uniforme + offset: o tabCapture pode gerar o vídeo com letterbox
+      // (barras pretas) quando o aspecto difere do viewport; isso centraliza no conteúdo.
+      const rect = deviceEl.getBoundingClientRect();
+      const scale = Math.min(video.videoWidth / window.innerWidth, video.videoHeight / window.innerHeight);
+      const offX = (video.videoWidth - window.innerWidth * scale) / 2;
+      const offY = (video.videoHeight - window.innerHeight * scale) / 2;
+      const crop = { x: offX + rect.left * scale, y: offY + rect.top * scale, w: rect.width * scale, h: rect.height * scale };
+      const canvas = document.createElement('canvas');
+      const cw = Math.max(2, Math.round(crop.w));
+      const ch = Math.max(2, Math.round(crop.h));
+      canvas.width = cw;
+      canvas.height = ch;
+      const cctx = canvas.getContext('2d');
+
+      let raf = 0;
+      const draw = () => {
+        cctx.clearRect(0, 0, cw, ch);
+        cctx.globalCompositeOperation = 'source-over';
+        cctx.drawImage(video, crop.x, crop.y, crop.w, crop.h, 0, 0, cw, ch);
+        // mantém só a silhueta do aparelho (cantos arredondados / ilha ficam transparentes)
+        cctx.globalCompositeOperation = 'destination-in';
+        if (geo.land) {
+          cctx.save();
+          cctx.translate(cw, 0);
+          cctx.rotate(Math.PI / 2);
+          cctx.drawImage(mask, 0, 0, ch, cw);
+          cctx.restore();
+        } else {
+          cctx.drawImage(mask, 0, 0, cw, ch);
+        }
+        cctx.globalCompositeOperation = 'source-over';
+        raf = requestAnimationFrame(draw);
+      };
+      draw();
+
+      // combina vídeo (canvas) + áudio (aba) para o MediaRecorder
+      const canvasStream = canvas.captureStream(30);
+      const recordStream = new MediaStream([...canvasStream.getVideoTracks(), ...stream.getAudioTracks()]);
+
+      const hasAudio = stream.getAudioTracks().length > 0;
+      const pick = (c) => MediaRecorder.isTypeSupported(c);
+      const mime = (hasAudio && pick('video/webm;codecs=vp9,opus')) ? 'video/webm;codecs=vp9,opus'
+        : (hasAudio && pick('video/webm;codecs=vp8,opus')) ? 'video/webm;codecs=vp8,opus'
+        : pick('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9'
+        : pick('video/webm;codecs=vp8') ? 'video/webm;codecs=vp8' : 'video/webm';
+      const recorder = new MediaRecorder(recordStream, { mimeType: mime, videoBitsPerSecond: 8_000_000, audioBitsPerSecond: 128_000 });
+      const chunks = [];
+      recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+      recorder.onstop = () => {
+        cancelAnimationFrame(raf);
+        stream.getTracks().forEach((t) => t.stop());
+        canvasStream.getTracks().forEach((t) => t.stop());
+        audioCtx?.close();
+        const blob = new Blob(chunks, { type: 'video/webm' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `${deviceOf().id}-${new Date().toISOString().replace(/[:.]/g, '-')}.webm`;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(link.href), 5000);
+        toast('Gravação salva');
+      };
+      recorder.start();
+      rec = { recorder, btn };
+      btn.classList.add('ps-recording');
+      btn.title = 'Parar gravação';
+      toast(hasAudio ? 'Gravando (com áudio)… clique para parar' : 'Gravando… clique para parar');
+    } catch (error) {
+      rec = null;
+      toast(`Falha ao gravar: ${error.message}`);
+    }
+  }
+
+  function stopRecord() {
+    if (!rec) return;
+    const { recorder, btn } = rec;
+    rec = null;
+    btn.classList.remove('ps-recording');
+    btn.title = 'Gravar';
+    if (recorder.state !== 'inactive') recorder.stop();
+  }
+
   function normalizeUrl(raw) {
     const value = raw.trim();
     if (!value) return null;
@@ -801,7 +923,7 @@
       catch { toast(frameUrl ?? state.frameUrl); }
     },
     help: () => toast('Clique no ícone da extensão para ligar/desligar o simulador'),
-    video: () => toast('Gravação de tela não está disponível nesta versão'),
+    video: (btn) => toggleRecord(btn),
     panels: () => toast('Mais modos em breve'),
   };
 
@@ -846,6 +968,10 @@
     state.keyboard = keyboardToggle.checked;
     if (!state.keyboard) closeKeyboard();
     saveView({ keyboard: state.keyboard });
+  });
+
+  recAudioInput.addEventListener('change', () => {
+    state.recordAudio = recAudioInput.checked;
   });
 
   window.addEventListener('resize', layout);
