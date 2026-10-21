@@ -1,0 +1,427 @@
+/* Injetado via scripting.insertCSS (folha de usuário: não some ao trocar o DOM).
+   Visual: aparelho centralizado com moldura de titânio, Dynamic Island e status bar iOS,
+   o site real num iframe e uma barra de ferramentas circular flutuante à direita. */
+
+html {
+  background: #17181c !important;
+}
+
+body.phonesim-body {
+  --ps-bg: #17181c;
+  --ps-text: #e6edf3;
+  --ps-muted: #b4b7bd;
+  --ps-panel: #1f2127;
+  --ps-line: #30353f;
+  --ps-hover: #ffffff14;
+  --ps-accent: #3b82f6;
+  --frame-a: #43454b;
+  --frame-b: #202126;
+
+  all: initial;
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: radial-gradient(120% 90% at 50% 0%, #1e2026 0%, var(--ps-bg) 60%);
+  color: var(--ps-text);
+  font: 14px/1.4 -apple-system, "SF Pro Text", system-ui, "Segoe UI", Roboto, sans-serif;
+}
+
+.phonesim-body *,
+.phonesim-body *::before,
+.phonesim-body *::after {
+  box-sizing: border-box;
+}
+
+/* ---------- palco e aparelho ---------- */
+
+.ps-stage {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ps-scaler {
+  position: relative;
+  flex: none;
+}
+
+.ps-device {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+}
+
+/* moldura real do aparelho (device.png @2x da extensão), por cima da tela;
+   cliques atravessam para o site. O drop-shadow segue o recorte da imagem. */
+.ps-frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0; /* atrás da tela: a device.png tem a tela preta embutida */
+  pointer-events: none;
+  filter: drop-shadow(0 26px 50px rgba(0, 0, 0, 0.55));
+}
+
+/* tela encaixada no recorte da moldura (left/top/width/height do catálogo, via JS) */
+.ps-screen {
+  position: absolute;
+  overflow: hidden;
+  background: #000;
+  z-index: 1; /* na frente da moldura; recortada pelo clip-path (cantos + ilha/notch) */
+}
+
+.ps-screen iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+  /* clip-path (cantos arredondados + ilha/notch) é definido inline por aparelho */
+}
+
+/* ---------- status bar iOS/Android ---------- */
+
+.ps-status {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 4;
+  height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 30px 0;
+  color: #fff;
+  font-weight: 600;
+  font-size: 15px;
+  text-shadow: 0 0 3px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+.ps-status .ps-status-right { display: flex; align-items: center; gap: 6px; }
+
+.ps-device[data-kind="tablet"] .ps-status { display: none; }
+
+/* durante o print: sem status bar, sem moldura e sem recorte (print limpo da tela) */
+.ps-capturing .ps-status,
+.ps-capturing .ps-frame { display: none !important; }
+.ps-capturing .ps-screen iframe { clip-path: none !important; }
+
+/* ---------- barra de ferramentas à direita ---------- */
+
+.ps-rail {
+  position: fixed;
+  right: 10px;
+  top: 0;
+  bottom: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 14px 0;
+}
+.ps-rail .ps-spacer { flex: 1; }
+
+.ps-tool {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  border: 0;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--ps-muted);
+  cursor: pointer;
+}
+.ps-tool:hover,
+.ps-tool[aria-expanded="true"] { background: var(--ps-hover); color: #fff; }
+.ps-tool svg { width: 19px; height: 19px; }
+.ps-tool .ps-badge {
+  position: absolute;
+  top: -1px;
+  right: -5px;
+  background: #2ea043;
+  color: #fff;
+  font-size: 7.5px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  padding: 1px 3px;
+  border-radius: 3px;
+  line-height: 1;
+}
+
+/* ---------- popovers (aparelhos, zoom, ajustes) ---------- */
+
+.ps-pop {
+  position: fixed;
+  right: 58px;
+  z-index: 25;
+  width: 260px;
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: 12px;
+  border: 1px solid var(--ps-line);
+  border-radius: 12px;
+  background: var(--ps-panel);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55);
+}
+.ps-pop[hidden] { display: none; }
+.ps-pop h3 {
+  margin: 0 0 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ps-muted);
+}
+.ps-pop .ps-field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+.ps-pop label { font-size: 12px; color: var(--ps-muted); }
+
+.ps-opt, .ps-input, .ps-select, .ps-row-btn {
+  height: 32px;
+  border: 1px solid var(--ps-line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ps-text);
+  font: inherit;
+}
+.ps-opt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0 10px;
+  cursor: pointer;
+  text-align: left;
+}
+.ps-opt:hover { background: var(--ps-hover); }
+.ps-opt[data-on="true"] { border-color: var(--ps-accent); color: #fff; }
+.ps-opt small { color: var(--ps-muted); font-variant-numeric: tabular-nums; }
+.ps-group-label {
+  margin: 10px 0 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ps-muted);
+}
+.ps-group-label:first-child { margin-top: 0; }
+
+.ps-input, .ps-select { width: 100%; padding: 0 10px; }
+.ps-input { background: var(--ps-bg); }
+.ps-select { cursor: pointer; }
+.ps-select option, .ps-select optgroup { background: var(--ps-panel); color: var(--ps-text); }
+
+/* ---------- painel de aparelhos (grade) ---------- */
+
+.ps-pop-devices { width: 452px; max-width: calc(100vw - 80px); }
+
+.ps-vis-head {
+  margin-bottom: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ps-muted);
+}
+.ps-vis-row { display: flex; align-items: center; gap: 16px; padding-bottom: 14px; margin-bottom: 4px; border-bottom: 1px solid var(--ps-line); }
+.ps-vis-item {
+  width: 54px; height: 54px;
+  display: flex; align-items: center; justify-content: center;
+  border: 2px solid var(--ps-accent); border-radius: 50%;
+  color: var(--ps-text); overflow: hidden;
+}
+.ps-vis-item img { height: 40px; width: auto; object-fit: contain; }
+.ps-vis-add {
+  position: relative;
+  width: 50px; height: 50px;
+  display: flex; align-items: center; justify-content: center;
+  border: 2px dashed var(--ps-line); border-radius: 50%;
+  background: transparent; color: var(--ps-muted); cursor: pointer;
+}
+.ps-vis-add:hover { color: var(--ps-text); border-color: var(--ps-muted); }
+.ps-vis-add .ps-badge { position: absolute; top: -6px; right: -8px; }
+
+.ps-dgroup-head {
+  display: flex; align-items: center; gap: 8px;
+  margin: 16px 0 10px;
+  font-size: 13px; font-weight: 600; color: var(--ps-text);
+}
+.ps-dgroup-head svg { color: var(--ps-muted); }
+
+.ps-dgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(78px, 1fr));
+  gap: 8px;
+}
+.ps-dcard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  padding: 12px 6px 9px;
+  border: 1px solid var(--ps-line);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ps-text);
+  cursor: pointer;
+}
+.ps-dcard:hover { background: var(--ps-hover); }
+.ps-dcard[data-on="true"] { border-color: var(--ps-accent); box-shadow: inset 0 0 0 1px var(--ps-accent); }
+.ps-dcard-ico { height: 44px; width: auto; max-width: 100%; object-fit: contain; }
+.ps-dcard-name { font-size: 11px; line-height: 1.2; text-align: center; }
+
+.ps-nav { display: flex; gap: 6px; margin-bottom: 14px; }
+.ps-row-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.ps-row-btn:hover { background: var(--ps-hover); }
+
+.ps-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 12px;
+  cursor: pointer;
+}
+.ps-check input { margin: 2px 0 0; accent-color: var(--ps-accent); }
+.ps-check small { display: block; color: var(--ps-muted); font-size: 12px; }
+
+.ps-opt:focus-visible, .ps-input:focus-visible, .ps-select:focus-visible,
+.ps-row-btn:focus-visible, .ps-tool:focus-visible {
+  outline: 2px solid var(--ps-accent);
+  outline-offset: 1px;
+}
+
+/* ---------- aviso ---------- */
+
+.ps-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 26px;
+  z-index: 30;
+  padding: 9px 15px;
+  border-radius: 9px;
+  background: #2b2f38;
+  color: var(--ps-text);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  transform: translate(-50%, 10px);
+  transition: opacity 0.2s, transform 0.2s;
+  pointer-events: none;
+}
+.ps-toast.ps-visible { opacity: 1; transform: translate(-50%, 0); }
+
+@media (prefers-reduced-motion: reduce) {
+  .ps-toast { transition: none; }
+}
+
+/* ---------- teclado virtual ---------- */
+
+.ps-keyboard {
+  --kb-bg: #d1d4da;
+  --kb-key: #fff;
+  --kb-special: #abb0ba;
+  --kb-text: #000;
+  --kb-shadow: 0 1px 0 #898a8d;
+  --kb-radius: 5px;
+  --kb-gap: 6px;
+
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--kb-gap) * 1.8);
+  padding: 8px 3px 10px;
+  background: var(--kb-bg);
+  font-family: -apple-system, "SF Pro Text", system-ui, sans-serif;
+  user-select: none;
+}
+
+/* fechado: deslizado para baixo da tela (recortado pelo overflow da .ps-screen);
+   aberto: sobe até 0, como o teclado do celular. */
+.ps-keyboard {
+  transform: translateY(100%);
+  transition: transform 0.28s cubic-bezier(0.33, 1, 0.68, 1);
+  will-change: transform;
+}
+.ps-keyboard.ps-kb-open { transform: translateY(0); }
+
+@media (prefers-reduced-motion: reduce) {
+  .ps-keyboard { transition: none; }
+}
+
+[data-home="false"]:not([data-landscape="true"]) .ps-keyboard { padding-bottom: 34px; }
+[data-home="false"]:not([data-landscape="true"]) .ps-keyboard::after {
+  content: "";
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  width: 134px;
+  height: 5px;
+  margin-left: -67px;
+  border-radius: 3px;
+  background: #000;
+}
+
+.ps-keyboard[data-os="android"] {
+  --kb-bg: #e9eef6;
+  --kb-key: #fff;
+  --kb-special: #ccd5e3;
+  --kb-text: #1f1f1f;
+  --kb-shadow: none;
+  --kb-radius: 7px;
+  font-family: Roboto, system-ui, sans-serif;
+}
+
+.ps-kb-row {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  gap: var(--kb-gap);
+  min-height: 0;
+}
+
+.ps-keyboard[data-layout="text"] .ps-kb-row:nth-child(2) { padding: 0 5%; }
+
+.ps-key {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--kb-radius);
+  background: var(--kb-key);
+  box-shadow: var(--kb-shadow);
+  color: var(--kb-text);
+  font: inherit;
+  font-size: 1.15em;
+  cursor: pointer;
+}
+
+.ps-key:active { filter: brightness(0.85); }
+.ps-key[data-special] { background: var(--kb-special); font-size: 0.85em; }
+.ps-key[data-special="shift"],
+.ps-key[data-special="backspace"] { flex-grow: 1.4; font-size: 1.1em; }
+.ps-key[data-special="mode"],
+.ps-key[data-special="enter"] { flex-grow: 2.2; }
+.ps-key[data-special="space"] { flex-grow: 6; background: var(--kb-key); }
+.ps-key.ps-key-on { background: var(--kb-key); }
+.ps-keyboard[data-os="android"] .ps-key[data-special="enter"] { background: #0b57d0; color: #fff; }
+.ps-keyboard[data-layout="numeric"] .ps-key { font-size: 1.4em; }
