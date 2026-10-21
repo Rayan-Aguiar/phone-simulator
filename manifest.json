@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "Phone Simulator",
+  "version": "0.1.0",
+  "description": "Visualize qualquer site dentro de um aparelho simulado (iPhone, Android, tablets).",
+  "action": {
+    "default_title": "Abrir/fechar simulador nesta aba",
+    "default_icon": {
+      "16": "icons/16.png",
+      "32": "icons/32.png",
+      "48": "icons/48.png",
+      "128": "icons/128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/16.png",
+    "32": "icons/32.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": ["declarativeNetRequest", "scripting", "storage", "tabs", "webNavigation"],
+  "host_permissions": ["<all_urls>"],
+  "web_accessible_resources": [
+    {
+      "resources": ["assets/devices/*/device.png", "assets/devices/*/terminal-mini.png"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["inject/spoof.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    }
+  ]
+}
