@@ -40,8 +40,52 @@ body.phonesim-body {
 .ps-stage {
   flex: 1;
   display: flex;
+  overflow: auto;
+  padding: 20px;
+}
+
+/* margin:auto centraliza e permite rolar quando os aparelhos passam da tela */
+.ps-windows {
+  flex: none;
+  display: flex;
+  align-items: flex-start;
+  margin: auto;
+}
+
+.ps-window {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.ps-win-close {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  z-index: 9;
+  width: 26px;
+  height: 26px;
+  display: flex;
   align-items: center;
   justify-content: center;
+  border: 1px solid var(--ps-line);
+  border-radius: 50%;
+  background: var(--ps-panel);
+  color: var(--ps-muted);
+  cursor: pointer;
+}
+.ps-win-close:hover { color: #fff; background: var(--ps-hover); }
+.ps-win-close svg { width: 14px; height: 14px; }
+
+/* anel no aparelho ativo (só quando há mais de um) */
+.ps-window[data-active="true"] .ps-scaler::after {
+  content: "";
+  position: absolute;
+  inset: -8px;
+  border: 2px solid var(--ps-accent);
+  border-radius: 22px;
+  pointer-events: none;
 }
 
 .ps-scaler {
@@ -77,12 +121,14 @@ body.phonesim-body {
 }
 
 .ps-screen iframe {
-  display: block;
+  position: absolute;
+  left: 0;
+  top: 0; /* deslocado para baixo da status bar via JS (top/height inline) */
   width: 100%;
   height: 100%;
+  display: block;
   border: 0;
   background: #fff;
-  /* clip-path (cantos arredondados + ilha/notch) é definido inline por aparelho */
 }
 
 /* ---------- status bar iOS/Android ---------- */
@@ -93,11 +139,11 @@ body.phonesim-body {
   left: 0;
   right: 0;
   z-index: 4;
-  height: 54px;
+  height: 47px; /* ajustada por aparelho via JS (statusInset) */
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 30px 0;
+  padding: 0 30px;
   color: #fff;
   font-weight: 600;
   font-size: 15px;
@@ -231,13 +277,15 @@ body.phonesim-body {
   text-transform: uppercase;
   color: var(--ps-muted);
 }
-.ps-vis-row { display: flex; align-items: center; gap: 16px; padding-bottom: 14px; margin-bottom: 4px; border-bottom: 1px solid var(--ps-line); }
+.ps-vis-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding-bottom: 14px; margin-bottom: 4px; border-bottom: 1px solid var(--ps-line); }
 .ps-vis-item {
-  width: 54px; height: 54px;
+  width: 54px; height: 54px; padding: 0;
   display: flex; align-items: center; justify-content: center;
-  border: 2px solid var(--ps-accent); border-radius: 50%;
-  color: var(--ps-text); overflow: hidden;
+  border: 2px solid var(--ps-line); border-radius: 50%;
+  background: transparent; color: var(--ps-text); overflow: hidden; cursor: pointer;
 }
+.ps-vis-item:hover { border-color: var(--ps-muted); }
+.ps-vis-item[data-on="true"] { border-color: var(--ps-accent); }
 .ps-vis-item img { height: 40px; width: auto; object-fit: contain; }
 .ps-vis-add {
   position: relative;
@@ -506,3 +554,12 @@ body.phonesim-body {
 }
 @keyframes ps-rec-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
 @media (prefers-reduced-motion: reduce) { .ps-tool.ps-recording::after { animation: none; } }
+
+/* aviso de User-Agent (vários aparelhos de OS diferentes) */
+.ps-note {
+  margin: 10px 0 0;
+  color: var(--ps-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.ps-note[hidden] { display: none; }

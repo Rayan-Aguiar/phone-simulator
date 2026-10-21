@@ -1,6 +1,6 @@
 // UI do simulador. Injetada no frame de cima da aba (mundo isolado) pelo background.
-// Substitui o conteúdo da página por um aparelho centralizado (moldura + status bar iOS)
-// com o site num iframe do mesmo domínio, e uma barra de ferramentas circular à direita.
+// Substitui o conteúdo da página por um ou mais aparelhos lado a lado (moldura PNG + status
+// bar iOS), cada um com o site num iframe do mesmo domínio, e uma barra de ferramentas à direita.
 (async () => {
   if (window.__phonesimMounted || !(document instanceof HTMLDocument)) return;
   window.__phonesimMounted = true;
@@ -9,6 +9,7 @@
   window.stop();
 
   const { devices, findDevice, defaultDeviceId, userAgentFor } = globalThis.PHONESIM;
+  const MAX_WINDOWS = 6;
 
   // allow-top-navigation-by-user-activation: links clicados podem sair do iframe,
   // mas scripts de "frame busting" não conseguem derrubar o simulador.
@@ -39,7 +40,6 @@
   const icon = (name) =>
     `<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
 
-  // silhueta de telefone/tablet dos cards do catálogo
   const plusGlyph = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 6v12M6 12h12"/></svg>';
 
   // ícones e rótulos das categorias do painel de aparelhos
@@ -65,7 +65,6 @@
     return response;
   };
 
-  // Visual de aparelho único: trabalhamos sempre com o 1º aparelho da lista.
   const state = {
     windows: [{ id: 1, deviceId: defaultDeviceId, rotated: false }],
     zoom: 'fit',
@@ -75,9 +74,13 @@
     frameUrl: location.href,
   };
   Object.assign(state, await send({ type: 'phonesim:get-state' }));
-  const win = state.windows[0];
+  let nextWindowId = Math.max(...state.windows.map((w) => w.id)) + 1;
+  let activeId = state.windows[0].id;
 
-  const deviceOf = () => findDevice(win.deviceId) ?? findDevice(defaultDeviceId);
+  const deviceOf = (win) => findDevice(win.deviceId) ?? findDevice(defaultDeviceId);
+  const winOf = (id) => state.windows.find((w) => w.id === id);
+  const activeWin = () => winOf(activeId) ?? state.windows[0];
+  const activeView = () => views.get(activeWin().id);
 
   // ---------- montagem do DOM ----------
   const originalTitle = document.title || location.hostname;
@@ -94,21 +97,11 @@
   const body = document.createElement('body');
   body.className = 'phonesim-body';
   body.innerHTML = `
-    <main class="ps-stage">
-      <div class="ps-scaler">
-        <div class="ps-device">
-          <div class="ps-screen">
-            <div class="ps-status"><span class="ps-clock"></span><span class="ps-status-right">${STATUS_ICONS}</span></div>
-            <div class="ps-keyboard"></div>
-          </div>
-          <img class="ps-frame" alt="" />
-        </div>
-      </div>
-    </main>
+    <main class="ps-stage"><div class="ps-windows"></div></main>
 
     <nav class="ps-rail">
       ${railTool('close', 'Sair do simulador')}
-      ${railTool('devices', 'Trocar aparelho')}
+      ${railTool('devices', 'Aparelhos (comparar)')}
       ${railTool('alert', 'Detalhes do aparelho')}
       ${railTool('rotate', 'Girar')}
       ${railTool('zoom', 'Zoom')}
@@ -144,96 +137,75 @@
       <div class="ps-nav">
         <button class="ps-row-btn" data-nav="back" title="Voltar">${icon('back')}</button>
         <button class="ps-row-btn" data-nav="forward" title="Avançar">${icon('forward')}</button>
-        <button class="ps-row-btn" data-nav="reload" title="Recarregar">${icon('reload')}</button>
+        <button class="ps-row-btn" data-nav="reload" title="Recarregar todos">${icon('reload')}</button>
       </div>
       <h3>Opções</h3>
-      <label class="ps-check"><input type="checkbox" class="ps-sync"><span>Sincronizar interações<small>Rolagem, cliques e digitação</small></span></label>
+      <label class="ps-check"><input type="checkbox" class="ps-sync"><span>Sincronizar interações<small>Rolagem, cliques e digitação entre aparelhos</small></span></label>
       <label class="ps-check"><input type="checkbox" class="ps-keyboard-toggle"><span>Teclado virtual<small>Aparece ao tocar num campo</small></span></label>
       <label class="ps-check"><input type="checkbox" class="ps-rec-audio"><span>Gravar com áudio<small>Captura o som da aba no vídeo</small></span></label>
+      <p class="ps-note" hidden>O cabeçalho User-Agent enviado ao servidor segue o 1º aparelho. Cada aparelho tem o seu no JavaScript.</p>
     </div>
 
     <div class="ps-toast" role="status" aria-live="polite"></div>`;
   root.replaceChildren(head, body);
 
   const $ = (sel) => body.querySelector(sel);
-  const scalerEl = $('.ps-scaler');
-  const deviceEl = $('.ps-device');
-  const screenEl = $('.ps-screen');
-  const frameImg = $('.ps-frame');
-  const keyboardEl = $('.ps-keyboard');
   const assetUrl = (p) => chrome.runtime.getURL(p);
-  const setFrameSrc = (d) => { frameImg.src = assetUrl(`assets/devices/${d.id}/device.png`); };
-  const clockEl = $('.ps-clock');
+  const windowsEl = $('.ps-windows');
+  const stageEl = $('.ps-stage');
   const toastEl = $('.ps-toast');
   const urlInput = $('.ps-url');
   const syncInput = $('.ps-sync');
   const keyboardToggle = $('.ps-keyboard-toggle');
   const recAudioInput = $('.ps-rec-audio');
   const devicesList = $('.ps-devices-list');
+  const visRow = $('.ps-vis-row');
+  const noteEl = $('.ps-note');
 
   syncInput.checked = state.syncScroll;
   keyboardToggle.checked = state.keyboard;
   recAudioInput.checked = state.recordAudio;
   urlInput.value = state.frameUrl;
 
-  // estado do teclado virtual desta tela
-  const kb = { open: false, layout: 'text', mode: 'letters', shift: false, hideTimer: null };
-  let frame = null;      // iframe do site
-  let frameUrl = null;   // último endereço pedido ao iframe
-  let syncing = false;   // true enquanto um carregamento pedido pela UI está em curso
+  // ---------- janelas de aparelho ----------
+  // views: id -> { el, scaler, device, screen, frameImg, keyboard, clock, kb, frame, url, syncing }
+  const views = new Map();
 
-  // ---------- relógio da status bar ----------
-  function tick() {
-    clockEl.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-  }
-  tick();
-  setInterval(tick, 15000);
-
-  // ---------- painel de aparelhos ----------
-  const visRow = $('.ps-vis-row');
-
-  function buildDeviceList() {
-    // linha "dispositivos visíveis na aba": o aparelho atual (selecionado) + adicionar
-    const current = deviceOf();
-    visRow.replaceChildren();
-    const item = document.createElement('div');
-    item.className = 'ps-vis-item';
-    item.title = current.name;
-    item.innerHTML = `<img src="${assetUrl(`assets/devices/${current.id}/terminal-mini.png`)}" alt="">`;
-    const add = document.createElement('button');
-    add.className = 'ps-vis-add';
-    add.dataset.visAdd = '';
-    add.title = 'Adicionar aparelho';
-    add.innerHTML = `${plusGlyph}<span class="ps-badge">NEW</span>`;
-    visRow.append(item, add);
-
-    // grade do catálogo, por categoria
-    devicesList.replaceChildren();
-    let currentGroup = null;
-    let grid = null;
-    for (const d of devices) {
-      if (d.group !== currentGroup) {
-        currentGroup = d.group;
-        const meta = GROUP_META[d.group] ?? { label: d.group, icon: '' };
-        const head = document.createElement('div');
-        head.className = 'ps-dgroup-head';
-        head.innerHTML = `${meta.icon}<span>${meta.label}</span>`;
-        devicesList.append(head);
-        grid = document.createElement('div');
-        grid.className = 'ps-dgrid';
-        devicesList.append(grid);
-      }
-      const card = document.createElement('button');
-      card.className = 'ps-dcard';
-      card.dataset.device = d.id;
-      card.dataset.on = String(d.id === win.deviceId);
-      card.title = `${d.name} · ${d.width}×${d.height}`;
-      card.innerHTML = `<img class="ps-dcard-ico" src="${assetUrl(`assets/devices/${d.id}/terminal-mini.png`)}" alt=""><span class="ps-dcard-name">${d.name}</span>`;
-      grid.append(card);
-    }
+  function createView(win) {
+    const el = document.createElement('section');
+    el.className = 'ps-window';
+    el.dataset.id = String(win.id);
+    el.innerHTML = `
+      <button class="ps-win-close" title="Fechar este aparelho">${icon('close')}</button>
+      <div class="ps-scaler">
+        <div class="ps-device">
+          <div class="ps-screen">
+            <div class="ps-status"><span class="ps-clock"></span><span class="ps-status-right">${STATUS_ICONS}</span></div>
+            <div class="ps-keyboard"></div>
+          </div>
+          <img class="ps-frame" alt="" />
+        </div>
+      </div>`;
+    windowsEl.append(el);
+    const view = {
+      el,
+      scaler: el.querySelector('.ps-scaler'),
+      device: el.querySelector('.ps-device'),
+      screen: el.querySelector('.ps-screen'),
+      status: el.querySelector('.ps-status'),
+      frameImg: el.querySelector('.ps-frame'),
+      keyboard: el.querySelector('.ps-keyboard'),
+      clock: el.querySelector('.ps-clock'),
+      kb: { open: false, layout: 'text', mode: 'letters', shift: false, hideTimer: null },
+      frame: null,
+      url: null,
+      syncing: false,
+    };
+    views.set(win.id, view);
+    view.frameImg.src = assetUrl(`assets/devices/${deviceOf(win).id}/device.png`);
+    return view;
   }
 
-  // ---------- iframe ----------
   function spoofConfig(d) {
     const ios = d.os === 'ios';
     return {
@@ -249,86 +221,113 @@
   }
 
   // Recria o iframe: o nome (com a config do aparelho) só é lido quando o documento carrega.
-  function loadFrame(url = frameUrl ?? state.frameUrl) {
-    closeKeyboard();
-    frame?.remove();
+  function loadFrame(win, url) {
+    const view = views.get(win.id);
+    url = url ?? view.url ?? state.frameUrl;
+    closeKeyboard(view);
+    view.frame?.remove();
     const el = document.createElement('iframe');
-    el.name = `phonesim:${btoa(JSON.stringify(spoofConfig(deviceOf())))}`;
+    el.name = `phonesim:${btoa(JSON.stringify(spoofConfig(deviceOf(win))))}`;
     el.setAttribute('sandbox', SANDBOX);
     el.allow = ALLOW;
     el.src = url;
-    screenEl.prepend(el);
-    frame = el;
-    frameUrl = url;
-    syncing = true;
+    view.screen.prepend(el);
+    view.frame = el;
+    view.url = url;
+    view.syncing = true;
+    layout(); // posiciona o iframe abaixo da status bar (top/height dependem da geometria)
   }
 
   // ---------- geometria e escala ----------
-  // Moldura real (device.png): caixa fw×fh; tela no offset (left,top) com tamanho width×height;
-  // o recorte da tela (cantos + ilha/notch) vem do path SVG do catálogo.
-  // No modo paisagem, gira a moldura 90° e troca os offsets de acordo.
-  function geometry() {
-    const d = deviceOf();
+  function geometry(win) {
+    const d = deviceOf(win);
     const land = win.rotated && d.rotate && d.pathL;
     if (!land) {
       return { d, land: false, w: d.width, h: d.height, left: d.left, top: d.top, fw: d.fw, fh: d.fh, clip: d.path };
     }
     // 90° horário: novo offset = (fh - top - h, left); caixa vira fh×fw.
-    return {
-      d, land: true,
-      w: d.height, h: d.width,
-      left: d.fh - d.top - d.height,
-      top: d.left,
-      fw: d.fh, fh: d.fw,
-      clip: d.pathL,
-    };
+    return { d, land: true, w: d.height, h: d.width, left: d.fh - d.top - d.height, top: d.left, fw: d.fh, fh: d.fw, clip: d.pathL };
+  }
+
+  // Altura (px da tela do aparelho) reservada para a status bar, para o site começar
+  // ABAIXO dela — como num celular de verdade. Sem isso, o header do site fica escondido
+  // atrás do relógio/ícones. Celulares com notch/ilha têm faixa maior que os com botão home.
+  function statusInset(d, land) {
+    if (d.kind === 'tablet' || land) return 0;
+    if (d.os === 'android') return 26;
+    return /[CcAaQq]/.test(d.path) ? 47 : 20; // path com curva = notch/ilha; reto = botão home
   }
 
   function layout() {
-    const { d, land, w, h, left, top, fw, fh, clip } = geometry();
-    deviceEl.dataset.kind = d.kind; // status bar some nos tablets
+    const items = state.windows.map((win) => ({ win, view: views.get(win.id), geo: geometry(win) }));
+    const GAP = 28;
 
-    // caixa da moldura
-    deviceEl.style.width = `${fw}px`;
-    deviceEl.style.height = `${fh}px`;
-
-    // moldura PNG: em paisagem, gira a imagem (tamanho natural fw0×fh0 = fh×fw da caixa)
-    if (land) {
-      frameImg.style.width = `${fh}px`;
-      frameImg.style.height = `${fw}px`;
-      frameImg.style.inset = 'auto';
-      frameImg.style.left = '50%';
-      frameImg.style.top = '50%';
-      frameImg.style.transform = 'translate(-50%, -50%) rotate(90deg)';
-    } else {
-      frameImg.style.cssText = '';
-    }
-
-    // tela encaixada no recorte, com clip (cantos + ilha/notch)
-    screenEl.style.left = `${left}px`;
-    screenEl.style.top = `${top}px`;
-    screenEl.style.width = `${w}px`;
-    screenEl.style.height = `${h}px`;
-    screenEl.style.clipPath = clip ? `path(evenodd, '${clip}')` : '';
-
+    // escala compartilhada: todos lado a lado cabem na largura e o mais alto na altura
     let scale = Number(state.zoom) / 100;
     if (state.zoom === 'fit') {
-      // Usa o tamanho da janela (a .ps-stage encolhe até o conteúdo); 150px reserva a barra à direita.
-      scale = Math.max(0.2, Math.min(1, (window.innerHeight - 40) / fh, (window.innerWidth - 150) / fw));
+      const availW = window.innerWidth - 150 - GAP * (items.length - 1);
+      const availH = window.innerHeight - 40;
+      const totalW = items.reduce((s, it) => s + it.geo.fw, 0);
+      const maxH = Math.max(...items.map((it) => it.geo.fh));
+      scale = Math.max(0.15, Math.min(1, availW / totalW, availH / maxH));
     }
-    // O transform encolhe só visualmente; dimensiona o scaler com o tamanho já escalado
-    // para a caixa de layout caber na tela (senão o aparelho estoura e corta).
-    deviceEl.style.transform = `scale(${scale})`;
-    scalerEl.style.width = `${fw * scale}px`;
-    scalerEl.style.height = `${fh * scale}px`;
 
-    const kbH = keyboardHeight(d, w, h, land);
-    keyboardEl.style.height = `${kbH}px`;
-    keyboardEl.style.fontSize = `${Math.round(Math.min(w, 500) / 18)}px`;
-    if (frame) frame.style.height = kb.open ? `${h - kbH}px` : '';
+    for (const { win, view, geo } of items) {
+      const { d, land, w, h, left, top, fw, fh, clip } = geo;
+      view.device.dataset.kind = d.kind;
+      view.device.style.width = `${fw}px`;
+      view.device.style.height = `${fh}px`;
+
+      if (land) {
+        view.frameImg.style.width = `${fh}px`;
+        view.frameImg.style.height = `${fw}px`;
+        view.frameImg.style.inset = 'auto';
+        view.frameImg.style.left = '50%';
+        view.frameImg.style.top = '50%';
+        view.frameImg.style.transform = 'translate(-50%, -50%) rotate(90deg)';
+      } else {
+        view.frameImg.style.cssText = '';
+      }
+
+      view.screen.style.left = `${left}px`;
+      view.screen.style.top = `${top}px`;
+      view.screen.style.width = `${w}px`;
+      view.screen.style.height = `${h}px`;
+      view.screen.style.clipPath = clip ? `path(evenodd, '${clip}')` : '';
+
+      view.device.style.transform = `scale(${scale})`;
+      view.scaler.style.width = `${fw * scale}px`;
+      view.scaler.style.height = `${fh * scale}px`;
+
+      const kbH = keyboardHeight(d, w, h, land);
+      view.keyboard.style.height = `${kbH}px`;
+      view.keyboard.style.fontSize = `${Math.round(Math.min(w, 500) / 18)}px`;
+
+      // reserva a faixa da status bar: o site começa abaixo dela e termina no topo do teclado.
+      const sb = statusInset(d, land);
+      view.status.style.height = `${sb}px`;
+      if (view.frame) {
+        view.frame.style.top = `${sb}px`;
+        view.frame.style.height = `${(view.kb.open ? h - kbH : h) - sb}px`;
+      }
+
+      view.el.dataset.active = String(win.id === activeId && state.windows.length > 1);
+      view.el.querySelector('.ps-win-close').hidden = state.windows.length === 1;
+    }
+
+    windowsEl.style.gap = `${GAP}px`;
+    // aviso de User-Agent quando há OS diferentes (o cabeçalho segue o 1º aparelho)
+    noteEl.hidden = new Set(state.windows.map((w) => deviceOf(w).os)).size < 2;
   }
 
-  // ---------- teclado virtual ----------
+  // ---------- relógio da status bar ----------
+  function tick() {
+    const t = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    for (const v of views.values()) v.clock.textContent = t;
+  }
+  setInterval(tick, 15000);
+
+  // ---------- teclado virtual (por aparelho) ----------
   function keyboardHeight(d, w, h, rotated) {
     if (d.kind === 'tablet') return Math.round(w * (rotated ? 0.3 : 0.42));
     if (rotated) return Math.round(h * 0.55);
@@ -337,7 +336,7 @@
 
   const SPECIAL_KEYS = ['shift', 'backspace', 'enter', 'mode', 'space'];
 
-  function keyboardRows(os) {
+  function keyboardRows(os, kb) {
     if (kb.layout === 'numeric') return [['1', '2', '3'], ['4', '5', '6'], ['7', '8', '9'], [',', '0', 'backspace']];
     const bottom = os === 'ios' ? ['mode', 'space', 'enter'] : ['mode', ',', 'space', '.', 'enter'];
     if (kb.mode === 'symbols') {
@@ -347,18 +346,20 @@
     return [letters('qwertyuiop'), letters('asdfghjkl'), ['shift', ...letters('zxcvbnm'), 'backspace'], bottom];
   }
 
-  function keyLabel(key, os) {
+  function keyLabel(key, os, kb) {
     if (key === 'mode') return kb.mode === 'symbols' ? 'ABC' : os === 'ios' ? '123' : '?123';
     if (key === 'space') return os === 'ios' ? 'espaço' : '';
     return { shift: '⇧', backspace: '⌫', enter: '↵' }[key] ?? key;
   }
 
-  function renderKeyboard() {
-    const os = deviceOf().os;
-    keyboardEl.dataset.os = os;
-    keyboardEl.dataset.layout = kb.layout;
-    keyboardEl.replaceChildren(
-      ...keyboardRows(os).map((row) => {
+  function renderKeyboard(win) {
+    const view = views.get(win.id);
+    const os = deviceOf(win).os;
+    const { kb } = view;
+    view.keyboard.dataset.os = os;
+    view.keyboard.dataset.layout = kb.layout;
+    view.keyboard.replaceChildren(
+      ...keyboardRows(os, kb).map((row) => {
         const rowEl = document.createElement('div');
         rowEl.className = 'ps-kb-row';
         for (const key of row) {
@@ -369,7 +370,7 @@
           button.dataset.key = key;
           if (SPECIAL_KEYS.includes(key)) button.dataset.special = key;
           if (key === 'shift' && kb.shift) button.classList.add('ps-key-on');
-          button.textContent = keyLabel(key, os);
+          button.textContent = keyLabel(key, os, kb);
           rowEl.append(button);
         }
         return rowEl;
@@ -377,74 +378,107 @@
     );
   }
 
-  function openKeyboard(layoutName) {
+  function openKeyboard(view, win, layoutName) {
+    const { kb } = view;
     clearTimeout(kb.hideTimer);
     if (!state.keyboard) return;
     if (!kb.open || kb.layout !== layoutName) Object.assign(kb, { layout: layoutName, mode: 'letters', shift: false });
     kb.open = true;
-    renderKeyboard();
-    layout(); // reserva o espaço do teclado (o site encolhe); o teclado sobe deslizando nele
-    // próximo frame: garante que o estado "fechado" (translateY 100%) foi aplicado antes de animar.
-    requestAnimationFrame(() => { if (kb.open) keyboardEl.classList.add('ps-kb-open'); });
+    renderKeyboard(win);
+    layout();
+    requestAnimationFrame(() => { if (kb.open) view.keyboard.classList.add('ps-kb-open'); });
   }
 
-  function closeKeyboard() {
-    clearTimeout(kb.hideTimer);
-    if (!kb.open) return;
-    kb.open = false;
-    keyboardEl.classList.remove('ps-kb-open'); // desce deslizando
+  function closeKeyboard(view) {
+    clearTimeout(view.kb.hideTimer);
+    if (!view.kb.open) return;
+    view.kb.open = false;
+    view.keyboard.classList.remove('ps-kb-open');
     layout();
   }
 
-  const scheduleCloseKeyboard = () => {
-    clearTimeout(kb.hideTimer);
-    kb.hideTimer = setTimeout(closeKeyboard, 120);
+  const scheduleCloseKeyboard = (view) => {
+    clearTimeout(view.kb.hideTimer);
+    view.kb.hideTimer = setTimeout(() => closeKeyboard(view), 120);
   };
 
-  function pressKey(key) {
+  function pressKey(view, win, key) {
+    const { kb } = view;
     if (key === 'shift') kb.shift = !kb.shift;
     else if (key === 'mode') kb.mode = kb.mode === 'symbols' ? 'letters' : 'symbols';
     else {
       const typed = key === 'space' ? ' ' : key;
-      frame?.contentWindow?.postMessage({ type: 'phonesim:apply', event: { kind: 'type', key: typed } }, '*');
+      view.frame?.contentWindow?.postMessage({ type: 'phonesim:apply', event: { kind: 'type', key: typed } }, '*');
       if (!kb.shift || typed.length !== 1) return;
       kb.shift = false;
     }
-    renderKeyboard();
+    renderKeyboard(win);
   }
 
   // mousedown cancelado: o campo dentro do iframe continua com o foco ao tocar nas teclas.
-  screenEl.addEventListener('mousedown', (event) => {
+  windowsEl.addEventListener('mousedown', (event) => {
     if (event.target.closest('.ps-keyboard')) event.preventDefault();
   });
-  screenEl.addEventListener('click', (event) => {
+  windowsEl.addEventListener('click', (event) => {
     const keyEl = event.target.closest('.ps-key');
-    if (keyEl) pressKey(keyEl.dataset.key);
-  });
-
-  // ---------- ponte com o iframe (spoof.js) ----------
-  window.addEventListener('message', (event) => {
-    if (!frame || event.source !== frame.contentWindow) return;
-    const data = event.data;
-    if (data?.type === 'phonesim:location') onFrameLocation(data);
-    else if (data?.type === 'phonesim:keyboard') {
-      if (data.open) openKeyboard(data.layout === 'numeric' ? 'numeric' : 'text');
-      else scheduleCloseKeyboard();
+    if (keyEl) {
+      const win = winOf(Number(keyEl.closest('.ps-window').dataset.id));
+      if (win) pressKey(views.get(win.id), win, keyEl.dataset.key);
+      return;
     }
-    // phonesim:sync não é repassado: só há um aparelho neste visual.
+    const closeEl = event.target.closest('.ps-win-close');
+    if (closeEl) { closeWindow(Number(closeEl.closest('.ps-window').dataset.id)); return; }
+    // clique no aparelho (moldura) foca ele
+    const winEl = event.target.closest('.ps-window');
+    if (winEl) setActive(Number(winEl.dataset.id));
   });
 
-  function onFrameLocation({ url }) {
-    frameUrl = url;
-    state.frameUrl = url;
-    closeKeyboard();
-    if (document.activeElement !== urlInput) urlInput.value = url;
-    syncing = false;
+  // ---------- ponte com os iframes (spoof.js) ----------
+  function viewBySource(source) {
+    for (const [id, view] of views) if (view.frame?.contentWindow === source) return [id, view];
+    return [];
+  }
+
+  window.addEventListener('message', (event) => {
+    const [id, view] = viewBySource(event.source);
+    if (!view) return;
+    const win = winOf(id);
+    const data = event.data;
+    if (data?.type === 'phonesim:location') onFrameLocation(id, view, data);
+    else if (data?.type === 'phonesim:keyboard') {
+      if (data.open) openKeyboard(view, win, data.layout === 'numeric' ? 'numeric' : 'text');
+      else scheduleCloseKeyboard(view);
+    } else if (data?.type === 'phonesim:sync' && state.syncScroll) {
+      for (const [otherId, other] of views) {
+        if (otherId !== id) other.frame?.contentWindow?.postMessage({ type: 'phonesim:apply', event: data.event }, '*');
+      }
+    }
+  });
+
+  function onFrameLocation(id, view, { url, sync }) {
+    view.url = url;
+    closeKeyboard(view);
+    if (id === activeId) {
+      state.frameUrl = url;
+      if (document.activeElement !== urlInput) urlInput.value = url;
+    }
+    const programmatic = view.syncing;
+    view.syncing = false;
+    if (programmatic || !sync || !state.syncScroll) return;
+    for (const [otherId, other] of views) {
+      if (otherId !== id && other.url !== url) loadFrame(winOf(otherId), url);
+    }
   }
 
   // ---------- persistência ----------
   const saveWindows = () => send({ type: 'phonesim:set-windows', windows: state.windows });
   const saveView = (patch) => send({ type: 'phonesim:set-view', ...patch }).catch(() => {});
+
+  // Se o 1º aparelho mudou, o User-Agent do cabeçalho mudou para todos: recarrega todos.
+  function reloadAfterSave({ primaryChanged }, changedWin) {
+    if (primaryChanged) state.windows.forEach((w) => loadFrame(w));
+    else if (changedWin) loadFrame(changedWin);
+  }
 
   // ---------- toast ----------
   let toastTimer;
@@ -455,7 +489,7 @@
     toastTimer = setTimeout(() => toastEl.classList.remove('ps-visible'), 2600);
   }
 
-  // ---------- captura de tela ----------
+  // ---------- captura de tela (aparelho ativo) ----------
   const nextFrame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()));
   const loadImage = (src) =>
     new Promise((resolve, reject) => {
@@ -465,23 +499,22 @@
       img.src = src;
     });
 
-  // Igual à extensão: compõe num canvas a moldura (device.png, base com a tela preta)
-  // + o print da tela recortado pela máscara do aparelho, em @2x, e salva via toBlob.
-  // Resultado: mockup com fundo transparente, sem a página atrás.
   async function screenshot() {
+    const win = activeWin();
+    const view = views.get(win.id);
     body.classList.add('ps-capturing');
     await nextFrame();
     await nextFrame();
     try {
-      const d = deviceOf();
+      const d = deviceOf(win);
       const [{ dataUrl }, frameSrc] = await Promise.all([
         send({ type: 'phonesim:capture' }),
         loadImage(assetUrl(`assets/devices/${d.id}/device.png`)),
       ]);
       const shot = await loadImage(dataUrl);
 
-      const geo = geometry(); // fw, fh, left, top, w, h, clip, land (já ajustados p/ rotação)
-      const S = 2; // asset é @2x → saída nítida
+      const geo = geometry(win);
+      const S = 2;
       const outW = Math.round(geo.fw * S);
       const outH = Math.round(geo.fh * S);
       const canvas = document.createElement('canvas');
@@ -490,7 +523,6 @@
       const ctx = canvas.getContext('2d');
       ctx.imageSmoothingQuality = 'high';
 
-      // 1) moldura (base). Em paisagem, gira 90° como na tela.
       if (geo.land) {
         ctx.save();
         ctx.translate(outW, 0);
@@ -501,9 +533,8 @@
         ctx.drawImage(frameSrc, 0, 0, outW, outH);
       }
 
-      // 2) print da tela, recortado pela máscara (cantos + ilha/notch)
       const ratio = shot.naturalWidth / window.innerWidth;
-      const r = screenEl.getBoundingClientRect();
+      const r = view.screen.getBoundingClientRect();
       ctx.save();
       ctx.setTransform(S, 0, 0, S, geo.left * S, geo.top * S);
       if (geo.clip) ctx.clip(new Path2D(geo.clip), 'evenodd');
@@ -511,16 +542,14 @@
       ctx.restore();
 
       body.classList.remove('ps-capturing');
-      openEditor(canvas, d); // editor pós-print (anotar e salvar), como na extensão
+      openEditor(canvas, d);
     } catch (error) {
       body.classList.remove('ps-capturing');
       toast(`Falha na captura: ${error.message}`);
     }
   }
 
-  // ---------- editor de imagem pós-print (como na extensão) ----------
-  // Ferramentas: retângulo, seta, linha e texto; cor e espessura; desfazer/limpar;
-  // copiar para a área de transferência e salvar em PNG ou WebP.
+  // ---------- editor de imagem pós-print ----------
   const EDITOR_COLORS = ['#ff0000', '#ff9500', '#ffcc00', '#34c759', '#2f81f7', '#af52de', '#000000', '#ffffff'];
   const EDITOR_ICONS = {
     rect: '<rect x="4" y="6" width="16" height="12" rx="1"/>',
@@ -534,7 +563,7 @@
   };
   const edIcon = (n) => `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${EDITOR_ICONS[n]}</svg>`;
 
-  let ed = null; // refs do editor (criado sob demanda)
+  let ed = null;
 
   function buildEditor() {
     const root = document.createElement('div');
@@ -728,9 +757,7 @@
     window.removeEventListener('keydown', ed.onKey, true);
   }
 
-  // ---------- gravação de tela (tabCapture + MediaRecorder), como na extensão ----------
-  // Grava o vídeo da aba recortado no aparelho + áudio da aba, com a máscara do aparelho
-  // (cantos/ilha) aplicada por destination-in com a device.png.
+  // ---------- gravação de tela (aparelho ativo) ----------
   let rec = null;
 
   const tabStream = (streamId, withAudio) => {
@@ -740,9 +767,10 @@
 
   async function toggleRecord(btn) {
     if (rec) return stopRecord();
+    const win = activeWin();
+    const view = views.get(win.id);
     try {
       const { streamId } = await send({ type: 'phonesim:record-stream-id' });
-      // respeita a opção "Gravar com áudio"; se o navegador recusar o áudio, grava só vídeo
       let stream;
       try { stream = await tabStream(streamId, state.recordAudio); }
       catch { stream = await tabStream(streamId, false); }
@@ -752,7 +780,6 @@
       video.muted = true;
       await video.play();
 
-      // o áudio capturado para de tocar na aba; devolve aos alto-falantes
       let audioCtx = null;
       if (stream.getAudioTracks().length) {
         audioCtx = new AudioContext();
@@ -760,14 +787,10 @@
         audioCtx.resume?.().catch(() => {});
       }
 
-      // máscara do aparelho (cantos + ilha/notch), girada em paisagem como na tela
-      const geo = geometry();
-      const mask = await loadImage(assetUrl(`assets/devices/${deviceOf().id}/device.png`));
+      const geo = geometry(win);
+      const mask = await loadImage(assetUrl(`assets/devices/${deviceOf(win).id}/device.png`));
 
-      // recorta a caixa do aparelho na resolução do vídeo da aba.
-      // Escala uniforme + offset: o tabCapture pode gerar o vídeo com letterbox
-      // (barras pretas) quando o aspecto difere do viewport; isso centraliza no conteúdo.
-      const rect = deviceEl.getBoundingClientRect();
+      const rect = view.device.getBoundingClientRect();
       const scale = Math.min(video.videoWidth / window.innerWidth, video.videoHeight / window.innerHeight);
       const offX = (video.videoWidth - window.innerWidth * scale) / 2;
       const offY = (video.videoHeight - window.innerHeight * scale) / 2;
@@ -784,7 +807,6 @@
         cctx.clearRect(0, 0, cw, ch);
         cctx.globalCompositeOperation = 'source-over';
         cctx.drawImage(video, crop.x, crop.y, crop.w, crop.h, 0, 0, cw, ch);
-        // mantém só a silhueta do aparelho (cantos arredondados / ilha ficam transparentes)
         cctx.globalCompositeOperation = 'destination-in';
         if (geo.land) {
           cctx.save();
@@ -800,7 +822,6 @@
       };
       draw();
 
-      // combina vídeo (canvas) + áudio (aba) para o MediaRecorder
       const canvasStream = canvas.captureStream(30);
       const recordStream = new MediaStream([...canvasStream.getVideoTracks(), ...stream.getAudioTracks()]);
 
@@ -821,7 +842,7 @@
         const blob = new Blob(chunks, { type: 'video/webm' });
         const link = document.createElement('a');
         link.href = URL.createObjectURL(blob);
-        link.download = `${deviceOf().id}-${new Date().toISOString().replace(/[:.]/g, '-')}.webm`;
+        link.download = `${deviceOf(win).id}-${new Date().toISOString().replace(/[:.]/g, '-')}.webm`;
         link.click();
         setTimeout(() => URL.revokeObjectURL(link.href), 5000);
         toast('Gravação salva');
@@ -858,6 +879,108 @@
     }
   }
 
+  // ---------- painel de aparelhos ----------
+  function buildDeviceList() {
+    // linha "dispositivos visíveis na aba": um círculo por aparelho + adicionar
+    visRow.replaceChildren();
+    for (const win of state.windows) {
+      const d = deviceOf(win);
+      const item = document.createElement('button');
+      item.className = 'ps-vis-item';
+      item.dataset.visId = String(win.id);
+      item.dataset.on = String(win.id === activeId);
+      item.title = d.name;
+      item.innerHTML = `<img src="${assetUrl(`assets/devices/${d.id}/terminal-mini.png`)}" alt="">`;
+      visRow.append(item);
+    }
+    if (state.windows.length < MAX_WINDOWS) {
+      const add = document.createElement('button');
+      add.className = 'ps-vis-add';
+      add.dataset.visAdd = '';
+      add.title = 'Adicionar aparelho';
+      add.innerHTML = `${plusGlyph}<span class="ps-badge">NEW</span>`;
+      visRow.append(add);
+    }
+
+    // grade do catálogo: muda o aparelho ATIVO
+    devicesList.replaceChildren();
+    let currentGroup = null;
+    let grid = null;
+    for (const d of devices) {
+      if (d.group !== currentGroup) {
+        currentGroup = d.group;
+        const meta = GROUP_META[d.group] ?? { label: d.group, icon: '' };
+        const headEl = document.createElement('div');
+        headEl.className = 'ps-dgroup-head';
+        headEl.innerHTML = `${meta.icon}<span>${meta.label}</span>`;
+        devicesList.append(headEl);
+        grid = document.createElement('div');
+        grid.className = 'ps-dgrid';
+        devicesList.append(grid);
+      }
+      const card = document.createElement('button');
+      card.className = 'ps-dcard';
+      card.dataset.device = d.id;
+      card.dataset.on = String(d.id === activeWin().deviceId);
+      card.title = `${d.name} · ${d.width}×${d.height}`;
+      card.innerHTML = `<img class="ps-dcard-ico" src="${assetUrl(`assets/devices/${d.id}/terminal-mini.png`)}" alt=""><span class="ps-dcard-name">${d.name}</span>`;
+      grid.append(card);
+    }
+  }
+
+  function setActive(id) {
+    if (!winOf(id) || id === activeId) return;
+    activeId = id;
+    const view = views.get(id);
+    state.frameUrl = view.url ?? state.frameUrl;
+    if (document.activeElement !== urlInput) urlInput.value = state.frameUrl;
+    layout();
+    if (!pops.devices.hidden) buildDeviceList();
+  }
+
+  async function addWindow() {
+    if (state.windows.length >= MAX_WINDOWS) return;
+    const lastIndex = devices.findIndex((d) => d.id === state.windows.at(-1).deviceId);
+    const win = { id: nextWindowId++, deviceId: devices[(lastIndex + 1) % devices.length].id, rotated: false };
+    state.windows.push(win);
+    createView(win);
+    layout();
+    loadFrame(win, state.frameUrl);
+    activeId = win.id;
+    layout();
+    buildDeviceList();
+    try { await saveWindows(); } catch (error) { toast(error.message); }
+  }
+
+  async function closeWindow(id) {
+    if (state.windows.length === 1) return;
+    state.windows = state.windows.filter((w) => w.id !== id);
+    views.get(id)?.el.remove();
+    views.delete(id);
+    if (activeId === id) activeId = state.windows[0].id;
+    layout();
+    if (!pops.devices.hidden) buildDeviceList();
+    try { reloadAfterSave(await saveWindows()); } catch (error) { toast(error.message); }
+  }
+
+  function selectDevice(id) {
+    const win = activeWin();
+    if (!findDevice(id) || id === win.deviceId) return closePops();
+    win.deviceId = id;
+    views.get(win.id).frameImg.src = assetUrl(`assets/devices/${id}/device.png`);
+    layout();
+    // reloadAfterSave recria o iframe (config nova; se for o 1º, recarrega todos pelo UA)
+    saveWindows().then((r) => reloadAfterSave(r, win)).catch((error) => toast(error.message));
+    closePops();
+  }
+
+  function setZoom(value) {
+    state.zoom = value;
+    layout();
+    saveView({ zoom: value });
+    closePops();
+  }
+
   // ---------- popovers ----------
   const pops = {
     devices: $('.ps-pop-devices'),
@@ -881,32 +1004,13 @@
     el.hidden = !willOpen;
     anchorBtn.setAttribute('aria-expanded', String(willOpen));
     if (!willOpen) return;
-    // preenche o conteúdo ANTES de medir a altura (senão o painel é medido vazio)
     if (name === 'devices') buildDeviceList();
     if (name === 'zoom') for (const opt of el.querySelectorAll('[data-zoom]')) opt.dataset.on = String(opt.dataset.zoom === String(state.zoom));
-    // trava a altura na janela e alinha com o botão, sem passar das bordas (scroll interno cuida do resto)
     const rect = anchorBtn.getBoundingClientRect();
     const maxH = window.innerHeight - 24;
     el.style.maxHeight = `${maxH}px`;
     const height = Math.min(el.offsetHeight, maxH);
     el.style.top = `${Math.max(12, Math.min(rect.top, window.innerHeight - height - 12))}px`;
-  }
-
-  function selectDevice(id) {
-    if (!findDevice(id) || id === win.deviceId) return closePops();
-    win.deviceId = id;
-    setFrameSrc(deviceOf());
-    layout();
-    loadFrame();
-    saveWindows().catch((error) => toast(error.message));
-    closePops();
-  }
-
-  function setZoom(value) {
-    state.zoom = value;
-    layout();
-    saveView({ zoom: value });
-    closePops();
   }
 
   // ---------- ações da barra ----------
@@ -915,12 +1019,12 @@
     devices: (btn) => togglePop('devices', btn),
     zoom: (btn) => togglePop('zoom', btn),
     settings: (btn) => togglePop('settings', btn),
-    rotate: () => { win.rotated = !win.rotated; closeKeyboard(); layout(); saveWindows().catch((e) => toast(e.message)); },
+    rotate: () => { const w = activeWin(); w.rotated = !w.rotated; closeKeyboard(views.get(w.id)); layout(); saveWindows().catch((e) => toast(e.message)); },
     camera: () => screenshot(),
-    alert: () => { const d = deviceOf(); toast(`${d.name} · ${d.width}×${d.height} · DPR ${d.dpr}`); },
+    alert: () => { const d = deviceOf(activeWin()); toast(`${d.name} · ${d.width}×${d.height} · DPR ${d.dpr}`); },
     share: async () => {
-      try { await navigator.clipboard.writeText(frameUrl ?? state.frameUrl); toast('Endereço copiado'); }
-      catch { toast(frameUrl ?? state.frameUrl); }
+      try { await navigator.clipboard.writeText(state.frameUrl); toast('Endereço copiado'); }
+      catch { toast(state.frameUrl); }
     },
     help: () => toast('Clique no ícone da extensão para ligar/desligar o simulador'),
     video: (btn) => toggleRecord(btn),
@@ -931,7 +1035,10 @@
     const toolBtn = event.target.closest('.ps-tool');
     if (toolBtn) return tools[toolBtn.dataset.tool]?.(toolBtn);
 
-    if (event.target.closest('[data-vis-add]')) return toast('Vários aparelhos lado a lado em breve');
+    if (event.target.closest('[data-vis-add]')) return addWindow();
+
+    const visItem = event.target.closest('[data-vis-id]');
+    if (visItem) { setActive(Number(visItem.dataset.visId)); return; }
 
     const deviceOpt = event.target.closest('[data-device]');
     if (deviceOpt) return selectDevice(deviceOpt.dataset.device);
@@ -943,19 +1050,17 @@
     if (navBtn) {
       if (navBtn.dataset.nav === 'back') history.back();
       else if (navBtn.dataset.nav === 'forward') history.forward();
-      else loadFrame();
+      else state.windows.forEach((w) => loadFrame(w));
       return;
     }
 
-    // clique fora dos popovers e da barra fecha os popovers
-    if (!event.target.closest('.ps-pop') && !event.target.closest('.ps-rail')) closePops();
+    if (!event.target.closest('.ps-pop') && !event.target.closest('.ps-rail') && !event.target.closest('.ps-window')) closePops();
   });
 
   $('.ps-url-form').addEventListener('submit', (event) => {
     event.preventDefault();
     const url = normalizeUrl(urlInput.value);
     if (!url) return toast('Endereço inválido (use http ou https)');
-    // Navega a aba inteira: o simulador remonta na nova página, mantendo cookies de primeira parte.
     location.href = url;
   });
 
@@ -966,7 +1071,7 @@
 
   keyboardToggle.addEventListener('change', () => {
     state.keyboard = keyboardToggle.checked;
-    if (!state.keyboard) closeKeyboard();
+    if (!state.keyboard) for (const v of views.values()) closeKeyboard(v);
     saveView({ keyboard: state.keyboard });
   });
 
@@ -978,7 +1083,8 @@
   window.addEventListener('keydown', (event) => { if (event.key === 'Escape') closePops(); });
 
   // ---------- start ----------
-  setFrameSrc(deviceOf());
+  for (const win of state.windows) createView(win);
+  tick();
   layout();
-  loadFrame(state.frameUrl);
+  for (const win of state.windows) loadFrame(win, state.frameUrl);
 })();
