@@ -4,6 +4,12 @@ Extensão para o Google Chrome (Manifest V3) que mostra **qualquer site dentro d
 
 Diferente do modo responsivo do DevTools, o site abre numa aba normal (mesmo domínio, mesmos cookies e login), dentro de uma moldura de aparelho de verdade, com o `User-Agent` e as APIs do navegador falsificados para o dispositivo escolhido.
 
+<p align="center">
+  <img src="docs/preview-xiaomi-mi-11i.webp" alt="Google aberto dentro de um Xiaomi Mi 11i simulado" width="320">
+</p>
+
+> Captura gerada pela própria extensão (Google aberto num Xiaomi Mi 11i).
+
 ---
 
 ## Sumário
