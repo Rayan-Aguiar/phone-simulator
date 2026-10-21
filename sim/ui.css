@@ -108,10 +108,10 @@ body.phonesim-body {
 
 .ps-device[data-kind="tablet"] .ps-status { display: none; }
 
-/* durante o print: sem status bar, sem moldura e sem recorte (print limpo da tela) */
-.ps-capturing .ps-status,
-.ps-capturing .ps-frame { display: none !important; }
-.ps-capturing .ps-screen iframe { clip-path: none !important; }
+/* durante o print: esconde a UI (barra, popovers, aviso), mantém a moldura do aparelho */
+.ps-capturing .ps-rail,
+.ps-capturing .ps-pop,
+.ps-capturing .ps-toast { visibility: hidden !important; }
 
 /* ---------- barra de ferramentas à direita ---------- */
 
@@ -425,3 +425,70 @@ body.phonesim-body {
 .ps-key.ps-key-on { background: var(--kb-key); }
 .ps-keyboard[data-os="android"] .ps-key[data-special="enter"] { background: #0b57d0; color: #fff; }
 .ps-keyboard[data-layout="numeric"] .ps-key { font-size: 1.4em; }
+
+/* ---------- editor de imagem pós-print ---------- */
+
+.ps-editor {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  background: rgba(10, 11, 13, 0.92);
+}
+.ps-editor[hidden] { display: none; }
+
+.ps-ed-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  background: var(--ps-panel);
+  border-bottom: 1px solid var(--ps-line);
+}
+.ps-ed-group { display: flex; align-items: center; gap: 4px; }
+.ps-ed-right { margin-left: auto; }
+
+.ps-ed-tool, .ps-ed-act {
+  width: 34px; height: 34px;
+  border: 1px solid transparent; border-radius: 8px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; color: var(--ps-muted); cursor: pointer;
+}
+.ps-ed-tool:hover, .ps-ed-act:hover { background: var(--ps-hover); color: #fff; }
+.ps-ed-tool[data-on="true"] { background: var(--ps-hover); color: #fff; border-color: var(--ps-accent); }
+
+.ps-ed-colors { gap: 6px; padding: 0 4px; }
+.ps-ed-color {
+  width: 20px; height: 20px; padding: 0;
+  border-radius: 50%; border: 2px solid transparent; cursor: pointer;
+}
+.ps-ed-color[data-on="true"] { border-color: #fff; box-shadow: 0 0 0 1px var(--ps-line); }
+
+.ps-ed-width input { width: 90px; accent-color: var(--ps-accent); }
+
+.ps-ed-save {
+  height: 34px; padding: 0 14px;
+  border: 1px solid var(--ps-line); border-radius: 8px;
+  background: var(--ps-accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer;
+}
+.ps-ed-save:hover { filter: brightness(1.1); }
+.ps-ed-save[data-ed-act="webp"] { background: transparent; color: var(--ps-text); }
+
+.ps-ed-stage {
+  flex: 1;
+  display: flex; align-items: center; justify-content: center;
+  overflow: auto; padding: 20px;
+}
+.ps-ed-canvas {
+  max-width: 100%; max-height: 100%;
+  background: #0b0b0d;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  cursor: crosshair; touch-action: none;
+}
+.ps-ed-textinput {
+  position: fixed; z-index: 41; min-width: 20px;
+  background: transparent; border: 1px dashed rgba(255, 255, 255, 0.5);
+  outline: none; padding: 0; margin: 0;
+}

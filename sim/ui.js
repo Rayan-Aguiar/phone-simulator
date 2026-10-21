@@ -461,31 +461,267 @@
       img.src = src;
     });
 
+  // Igual à extensão: compõe num canvas a moldura (device.png, base com a tela preta)
+  // + o print da tela recortado pela máscara do aparelho, em @2x, e salva via toBlob.
+  // Resultado: mockup com fundo transparente, sem a página atrás.
   async function screenshot() {
-    deviceEl.classList.add('ps-capturing');
+    body.classList.add('ps-capturing');
     await nextFrame();
     await nextFrame();
     try {
-      const { dataUrl } = await send({ type: 'phonesim:capture' });
-      const img = await loadImage(dataUrl);
-      const rect = screenEl.getBoundingClientRect();
-      const ratio = img.naturalWidth / window.innerWidth;
+      const d = deviceOf();
+      const [{ dataUrl }, frameSrc] = await Promise.all([
+        send({ type: 'phonesim:capture' }),
+        loadImage(assetUrl(`assets/devices/${d.id}/device.png`)),
+      ]);
+      const shot = await loadImage(dataUrl);
+
+      const geo = geometry(); // fw, fh, left, top, w, h, clip, land (já ajustados p/ rotação)
+      const S = 2; // asset é @2x → saída nítida
+      const outW = Math.round(geo.fw * S);
+      const outH = Math.round(geo.fh * S);
       const canvas = document.createElement('canvas');
-      canvas.width = Math.round(rect.width * ratio);
-      canvas.height = Math.round(rect.height * ratio);
-      canvas
-        .getContext('2d')
-        .drawImage(img, rect.left * ratio, rect.top * ratio, rect.width * ratio, rect.height * ratio, 0, 0, canvas.width, canvas.height);
-      const link = document.createElement('a');
-      link.href = canvas.toDataURL('image/png');
-      link.download = `${deviceOf().id}-${new Date().toISOString().replace(/[:.]/g, '-')}.png`;
-      link.click();
-      toast('Captura salva');
+      canvas.width = outW;
+      canvas.height = outH;
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingQuality = 'high';
+
+      // 1) moldura (base). Em paisagem, gira 90° como na tela.
+      if (geo.land) {
+        ctx.save();
+        ctx.translate(outW, 0);
+        ctx.rotate(Math.PI / 2);
+        ctx.drawImage(frameSrc, 0, 0);
+        ctx.restore();
+      } else {
+        ctx.drawImage(frameSrc, 0, 0, outW, outH);
+      }
+
+      // 2) print da tela, recortado pela máscara (cantos + ilha/notch)
+      const ratio = shot.naturalWidth / window.innerWidth;
+      const r = screenEl.getBoundingClientRect();
+      ctx.save();
+      ctx.setTransform(S, 0, 0, S, geo.left * S, geo.top * S);
+      if (geo.clip) ctx.clip(new Path2D(geo.clip), 'evenodd');
+      ctx.drawImage(shot, r.left * ratio, r.top * ratio, r.width * ratio, r.height * ratio, 0, 0, geo.w, geo.h);
+      ctx.restore();
+
+      body.classList.remove('ps-capturing');
+      openEditor(canvas, d); // editor pós-print (anotar e salvar), como na extensão
     } catch (error) {
+      body.classList.remove('ps-capturing');
       toast(`Falha na captura: ${error.message}`);
-    } finally {
-      deviceEl.classList.remove('ps-capturing');
     }
+  }
+
+  // ---------- editor de imagem pós-print (como na extensão) ----------
+  // Ferramentas: retângulo, seta, linha e texto; cor e espessura; desfazer/limpar;
+  // copiar para a área de transferência e salvar em PNG ou WebP.
+  const EDITOR_COLORS = ['#ff0000', '#ff9500', '#ffcc00', '#34c759', '#2f81f7', '#af52de', '#000000', '#ffffff'];
+  const EDITOR_ICONS = {
+    rect: '<rect x="4" y="6" width="16" height="12" rx="1"/>',
+    arrow: '<path d="M5 19L19 5"/><path d="M10 5h9v9"/>',
+    line: '<path d="M5 19L19 5"/>',
+    text: '<path d="M5 6h14"/><path d="M12 6v13"/>',
+    undo: '<path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/>',
+    clear: '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 14h10l1-14"/>',
+    copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
+    close: '<path d="M18 6L6 18M6 6l12 12"/>',
+  };
+  const edIcon = (n) => `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${EDITOR_ICONS[n]}</svg>`;
+
+  let ed = null; // refs do editor (criado sob demanda)
+
+  function buildEditor() {
+    const root = document.createElement('div');
+    root.className = 'ps-editor';
+    root.hidden = true;
+    const toolBtn = (t, title) => `<button class="ps-ed-tool" data-ed-tool="${t}" title="${title}">${edIcon(t)}</button>`;
+    root.innerHTML = `
+      <div class="ps-ed-bar">
+        <div class="ps-ed-group">
+          ${toolBtn('rect', 'Retângulo')}${toolBtn('arrow', 'Seta')}${toolBtn('line', 'Linha')}${toolBtn('text', 'Texto')}
+        </div>
+        <div class="ps-ed-group ps-ed-colors">
+          ${EDITOR_COLORS.map((c) => `<button class="ps-ed-color" data-ed-color="${c}" style="background:${c}" title="${c}"></button>`).join('')}
+        </div>
+        <label class="ps-ed-group ps-ed-width" title="Espessura"><input type="range" min="1" max="24" class="ps-ed-w"></label>
+        <div class="ps-ed-group">
+          <button class="ps-ed-act" data-ed-act="undo" title="Desfazer (Ctrl+Z)">${edIcon('undo')}</button>
+          <button class="ps-ed-act" data-ed-act="clear" title="Limpar">${edIcon('clear')}</button>
+        </div>
+        <div class="ps-ed-group ps-ed-right">
+          <button class="ps-ed-act" data-ed-act="copy" title="Copiar">${edIcon('copy')}</button>
+          <button class="ps-ed-save" data-ed-act="png">PNG</button>
+          <button class="ps-ed-save" data-ed-act="webp">WebP</button>
+          <button class="ps-ed-act" data-ed-act="close" title="Fechar">${edIcon('close')}</button>
+        </div>
+      </div>
+      <div class="ps-ed-stage"><canvas class="ps-ed-canvas"></canvas></div>`;
+    body.append(root);
+
+    const canvas = root.querySelector('.ps-ed-canvas');
+    const ctx = canvas.getContext('2d');
+    const st = { tool: 'rect', color: '#ff0000', w: Math.max(2, Math.round(3 * (window.devicePixelRatio || 1))), shapes: [], drawing: false, cur: null, base: null };
+    ed = { root, canvas, ctx, st };
+
+    const widthInput = root.querySelector('.ps-ed-w');
+    widthInput.value = st.w;
+
+    function markTool() {
+      for (const b of root.querySelectorAll('[data-ed-tool]')) b.dataset.on = String(b.dataset.edTool === st.tool);
+      for (const b of root.querySelectorAll('[data-ed-color]')) b.dataset.on = String(b.dataset.edColor === st.color);
+    }
+
+    function drawArrow(c, from, to, color, w) {
+      const head = Math.max(10, w * 3.5);
+      const ang = Math.atan2(to.y - from.y, to.x - from.x);
+      c.strokeStyle = color; c.fillStyle = color; c.lineWidth = w; c.lineCap = 'round';
+      c.beginPath(); c.moveTo(from.x, from.y); c.lineTo(to.x, to.y); c.stroke();
+      c.beginPath();
+      c.moveTo(to.x, to.y);
+      c.lineTo(to.x - head * Math.cos(ang - Math.PI / 6), to.y - head * Math.sin(ang - Math.PI / 6));
+      c.lineTo(to.x - head * Math.cos(ang + Math.PI / 6), to.y - head * Math.sin(ang + Math.PI / 6));
+      c.closePath(); c.fill();
+    }
+    const constrainSquare = (s, e) => {
+      const side = Math.max(Math.abs(e.x - s.x), Math.abs(e.y - s.y));
+      return { x: s.x + Math.sign(e.x - s.x) * side, y: s.y + Math.sign(e.y - s.y) * side };
+    };
+    const constrainAngle = (s, e, step = 45) => {
+      const d = Math.hypot(e.x - s.x, e.y - s.y);
+      const a = Math.round(Math.atan2(e.y - s.y, e.x - s.x) / (Math.PI / 180) / step) * step * (Math.PI / 180);
+      return { x: s.x + d * Math.cos(a), y: s.y + d * Math.sin(a) };
+    };
+
+    function drawShape(c, s) {
+      c.save();
+      c.lineWidth = s.w; c.strokeStyle = s.color; c.fillStyle = s.color; c.lineJoin = 'round'; c.lineCap = 'round';
+      if (s.type === 'rect') {
+        let e = s.end; if (s.lock) e = constrainSquare(s.start, e);
+        c.strokeRect(Math.min(s.start.x, e.x), Math.min(s.start.y, e.y), Math.abs(e.x - s.start.x), Math.abs(e.y - s.start.y));
+      } else if (s.type === 'arrow') {
+        let e = s.end; if (s.lock) e = constrainAngle(s.start, e);
+        drawArrow(c, s.start, e, s.color, s.w);
+      } else if (s.type === 'line') {
+        let e = s.end; if (s.lock) e = constrainAngle(s.start, e);
+        c.beginPath(); c.moveTo(s.start.x, s.start.y); c.lineTo(e.x, e.y); c.stroke();
+      } else if (s.type === 'text') {
+        c.font = `${s.size}px Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
+        c.textBaseline = 'top';
+        c.fillText(s.text, s.start.x, s.start.y);
+      }
+      c.restore();
+    }
+
+    function render() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(st.base, 0, 0);
+      for (const s of st.shapes) drawShape(ctx, s);
+      if (st.cur) drawShape(ctx, st.cur);
+    }
+    ed.render = render;
+
+    const pos = (e) => {
+      const r = canvas.getBoundingClientRect();
+      return { x: (e.clientX - r.left) * (canvas.width / r.width), y: (e.clientY - r.top) * (canvas.height / r.height) };
+    };
+
+    function placeText(p, clientX, clientY) {
+      const input = document.createElement('input');
+      input.className = 'ps-ed-textinput';
+      input.style.left = `${clientX}px`;
+      input.style.top = `${clientY}px`;
+      input.style.color = st.color;
+      input.style.font = `${Math.round(st.w * 7 * (canvas.getBoundingClientRect().width / canvas.width))}px Inter, system-ui, sans-serif`;
+      root.append(input);
+      input.focus();
+      const commit = () => {
+        if (input.value.trim()) st.shapes.push({ type: 'text', start: p, text: input.value, color: st.color, w: st.w, size: st.w * 7 });
+        input.remove();
+        render();
+      };
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } else if (e.key === 'Escape') input.remove(); });
+      input.addEventListener('blur', commit);
+    }
+
+    canvas.addEventListener('pointerdown', (e) => {
+      const p = pos(e);
+      if (st.tool === 'text') { placeText(p, e.clientX, e.clientY); return; }
+      st.drawing = true;
+      st.cur = { type: st.tool, start: p, end: p, color: st.color, w: st.w, lock: e.shiftKey };
+      canvas.setPointerCapture(e.pointerId);
+    });
+    canvas.addEventListener('pointermove', (e) => {
+      if (!st.drawing) return;
+      st.cur.end = pos(e); st.cur.lock = e.shiftKey; render();
+    });
+    canvas.addEventListener('pointerup', () => {
+      if (!st.drawing) return;
+      st.drawing = false;
+      if (st.cur) st.shapes.push(st.cur);
+      st.cur = null; render();
+    });
+
+    root.addEventListener('click', (e) => {
+      const tool = e.target.closest('[data-ed-tool]');
+      if (tool) { st.tool = tool.dataset.edTool; markTool(); return; }
+      const color = e.target.closest('[data-ed-color]');
+      if (color) { st.color = color.dataset.edColor; markTool(); return; }
+      const act = e.target.closest('[data-ed-act]')?.dataset.edAct;
+      if (!act) return;
+      if (act === 'undo') { st.shapes.pop(); render(); }
+      else if (act === 'clear') { st.shapes = []; render(); }
+      else if (act === 'close') closeEditor();
+      else if (act === 'copy') edCopy();
+      else edDownload(act);
+    });
+    widthInput.addEventListener('input', () => { st.w = Number(widthInput.value); });
+
+    function edDownload(fmt) {
+      canvas.toBlob((blob) => {
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `${ed.deviceId}-${new Date().toISOString().replace(/[:.]/g, '-')}.${fmt}`;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(link.href), 5000);
+      }, `image/${fmt}`, 0.85);
+      toast(`Imagem salva (${fmt.toUpperCase()})`);
+    }
+    async function edCopy() {
+      try {
+        const blob = await new Promise((res) => canvas.toBlob(res, 'image/png'));
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+        toast('Copiada para a área de transferência');
+      } catch { toast('Não foi possível copiar'); }
+    }
+
+    ed.markTool = markTool;
+    ed.onKey = (e) => {
+      if (e.key === 'Escape') closeEditor();
+      else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); st.shapes.pop(); render(); }
+    };
+    return ed;
+  }
+
+  function openEditor(baseCanvas, device) {
+    if (!ed) buildEditor();
+    const { st, canvas, root } = ed;
+    ed.deviceId = device.id;
+    st.shapes = []; st.cur = null; st.drawing = false; st.tool = 'rect'; st.color = '#ff0000';
+    canvas.width = baseCanvas.width;
+    canvas.height = baseCanvas.height;
+    st.base = baseCanvas;
+    ed.render();
+    ed.markTool();
+    root.hidden = false;
+    window.addEventListener('keydown', ed.onKey, true);
+  }
+
+  function closeEditor() {
+    if (!ed) return;
+    ed.root.hidden = true;
+    window.removeEventListener('keydown', ed.onKey, true);
   }
 
   function normalizeUrl(raw) {
