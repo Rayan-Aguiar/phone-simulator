@@ -11,6 +11,17 @@
     return;
   }
 
+  // Esconde a barra de rolagem do site (continua rolando), como num celular de verdade.
+  const hideScrollbar = () => {
+    const style = document.createElement('style');
+    style.textContent =
+      'html{scrollbar-width:none!important;-ms-overflow-style:none!important}' +
+      '::-webkit-scrollbar{width:0!important;height:0!important;display:none!important}';
+    (document.head || document.documentElement).append(style);
+  };
+  if (document.documentElement) hideScrollbar();
+  else document.addEventListener('DOMContentLoaded', hideScrollbar, { once: true });
+
   const define = (target, prop, get) => {
     try {
       Object.defineProperty(target, prop, { get, configurable: true });
